@@ -9,12 +9,25 @@ if [ -z "$VERSION" ]; then
     VERSION="0.2.0"
 fi
 
-if [ -f "$DIR/target/release/loaf" ]; then
-    BIN="$DIR/target/release/loaf"
-elif [ -f "$DIR/target/debug/loaf" ]; then
-    BIN="$DIR/target/debug/loaf"
-else
-    echo "Binary not found at target/release/loaf or target/debug/loaf"
+BIN="$DIR/target/release/loaf"
+if [ ! -x "$BIN" ]; then
+    echo "Release binary not found at $BIN; build it with cargo build --release first."
+    exit 1
+fi
+
+# A distro package must link against the distro's Qt and glibc, not paths from
+# a Nix or developer environment. Never try to repair those paths after build:
+# the binary may also require newer Qt/glibc symbols than the target system has.
+if ! command -v readelf >/dev/null 2>&1; then
+    echo "readelf is required to validate the release binary (install binutils)."
+    exit 1
+fi
+if readelf -l "$BIN" | grep -q '/nix/store/'; then
+    echo "Refusing to package a Nix-linked binary; build with the system Qt toolchain."
+    exit 1
+fi
+if readelf -d "$BIN" | grep -Eq '\((RPATH|RUNPATH)\)'; then
+    echo "Refusing to package a binary with RPATH/RUNPATH; rebuild it with the system toolchain."
     exit 1
 fi
 
@@ -37,9 +50,6 @@ cp "$DIR/THIRD-PARTY-LICENSES.md" "$TAR_STAGE/share/licenses/loaf/THIRD-PARTY-LI
 cp "$DIR/README.md" "$TAR_STAGE/share/doc/loaf/README.md"
 
 strip "$TAR_STAGE/bin/loaf" || true
-if command -v patchelf >/dev/null 2>&1; then
-    patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 --remove-rpath "$TAR_STAGE/bin/loaf" 2>/dev/null || true
-fi
 tar -czf "$DIST/loaf-v${VERSION}-linux-x86_64.tar.gz" -C "$DIR/packaging/tarball" "loaf-v${VERSION}-linux-x86_64"
 cp "$TAR_STAGE/bin/loaf" "$DIST/loaf-v${VERSION}-linux-x86_64"
 
@@ -49,11 +59,35 @@ mkdir -p "$DEB_STAGE/DEBIAN" "$DEB_STAGE/usr/bin" "$DEB_STAGE/usr/share/applicat
 cp "$DIR/packaging/deb/control" "$DEB_STAGE/DEBIAN/control"
 sed -i "s|^Version: .*|Version: $VERSION|" "$DEB_STAGE/DEBIAN/control"
 cp "$TAR_STAGE/bin/loaf" "$DEB_STAGE/usr/bin/loaf"
+SHLIBS_META="$(mktemp -d)"
+trap 'rm -rf "$SHLIBS_META"' EXIT
+mkdir -p "$SHLIBS_META/debian"
+{
+    printf 'Source: loaf\n\n'
+    cat "$DEB_STAGE/DEBIAN/control"
+} > "$SHLIBS_META/debian/control"
+# Keep public Qt library requirements without pinning private ABI versions or
+# package names changed by the t64 transition between Debian/Ubuntu releases.
+SHLIBS_DEPENDS="$(cd "$SHLIBS_META" && dpkg-shlibdeps -O -e"$DEB_STAGE/usr/bin/loaf" \
+    | sed -n 's/^shlibs:Depends=//p' \
+    | sed -E 's/(^|, )libqt6core6(t64)?( \([^)]*\))?//g; s/(^|, )(libqt6[[:alnum:]]+)t64 \(>= ([^)]*)\)/\1\2 (>= \3) | \2t64 (>= \3)/g; s/(^|, )qt6-(base|declarative)-private-abi \(=[^)]*\)//g; s/^, //; s/, ,/,/g; s/, $//')"
+rm -rf "$SHLIBS_META"
+trap - EXIT
+if [ -z "$SHLIBS_DEPENDS" ]; then
+    echo "Could not determine shared-library dependencies for the Debian package."
+    exit 1
+fi
+sed -i "s@\${shlibs:Depends}@$SHLIBS_DEPENDS@" "$DEB_STAGE/DEBIAN/control"
 cp "$DIR/packaging/assets/loaf.desktop" "$DEB_STAGE/usr/share/applications/loaf.desktop"
 cp -r "$DIR/packaging/assets/icons/hicolor" "$DEB_STAGE/usr/share/icons/"
 cp "$DIR/LICENSE" "$DEB_STAGE/usr/share/doc/loaf/copyright"
 cp "$DIR/THIRD-PARTY-LICENSES.md" "$DEB_STAGE/usr/share/doc/loaf/THIRD-PARTY-LICENSES.md"
 cp "$DIR/README.md" "$DEB_STAGE/usr/share/doc/loaf/README.md"
+if ldd "$DEB_STAGE/usr/bin/loaf" | grep -q 'not found'; then
+    echo "The packaged binary has unresolved shared-library dependencies."
+    exit 1
+fi
+"$DEB_STAGE/usr/bin/loaf" --version
 dpkg-deb --root-owner-group --build "$DEB_STAGE" "$DIST/loaf_${VERSION}_amd64.deb"
 
 echo "3. Building Arch package..."

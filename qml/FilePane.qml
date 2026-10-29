@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Effects
 import app.loaf
 
 // One file view (grid + list) bound to its own LoafEngine model. Used for
@@ -1044,15 +1043,7 @@ Item {
                             Item {
                                 anchors.fill: parent
                                 visible: card.hasThumb
-
-                                Rectangle {
-                                    id: thumbMask
-                                    anchors.fill: parent
-                                    radius: theme.radiusM
-                                    color: theme.surfaceContainerLowest
-                                    visible: false
-                                    layer.enabled: card.thumbable && theme.showThumbnails && !theme.lowPower
-                                }
+                                clip: true
 
                                 Image {
                                     id: thumbImg
@@ -1065,15 +1056,6 @@ Item {
                                     asynchronous: true
                                     cache: true
                                     smooth: true
-                                    // The rounded mask costs an offscreen layer: only for
-                                    // thumbable items, never in low-power mode. Must not
-                                    // depend on image status: toggling the layer while the
-                                    // thumbnail loads crashes Qt during DPI updates.
-                                    layer.enabled: card.thumbable && theme.showThumbnails && !theme.lowPower
-                                    layer.effect: MultiEffect {
-                                        maskEnabled: true
-                                        maskSource: thumbMask
-                                    }
                                 }
 
                                 Rectangle {

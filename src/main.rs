@@ -18,7 +18,7 @@ pub mod util;
 pub mod watcher;
 pub mod xdg;
 
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
+use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
 
 const HELP: &str = "Loaf - a Material 3 file manager
 
@@ -109,6 +109,7 @@ fn main() {
         (false, false) => "tab",
     };
     if let Some(mut engine) = engine.as_mut() {
+        engine.as_mut().add_import_path(&QString::from("qrc:/qt/qml"));
         native::ffi::setup_engine(engine.as_mut(), &args.paths, mode);
         engine.load(&url);
     }
